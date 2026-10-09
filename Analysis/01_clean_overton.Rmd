@@ -27,7 +27,7 @@ library(ggplot2)
 
 ## Loading In Reports (.CSV Files)
 ```{r}
-citation_data_raw <- read_delim("Data/overton_cosewic_citations_raw copy.csv") # NEED TO MAKE A DUMMY FILE.
+citation_data_raw <- read_delim("Data/example_overton_cosewic_citations_raw.csv") 
 
 citation_data_raw %>%
   distinct(`Title of citing document`) %>%
@@ -214,7 +214,7 @@ After manual corrections to the "citation_data_clean.csv" file each column shoul
 
 #Loading the File with Manual Corrections
 ```{r}
-citation_data_final <- read_delim("citation_data_final.csv") %>%
+citation_data_final <- read_delim("example_citation_data_final.csv.csv") %>%
   mutate(common = str_to_title(common))
 ```
 

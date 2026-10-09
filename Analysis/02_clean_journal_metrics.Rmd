@@ -30,13 +30,13 @@ Before importing the data into R, "cosewic_citation_journals.csv" was previously
 ```{r}
 
 # Read the list of journals cited in the COSEWIC assessment reports. 
-cosewic_cited_journals <- read_delim("cosewic_citation_journals.csv") %>%
+cosewic_cited_journals <- read_delim("example_cosewic_citation_journals.csv") %>%
   rename(journal = "journals_cited") %>%
   mutate(journal = str_to_upper(journal)) %>%
   select(-count)
 
 #Read the librarian-provided journal database containing ISSN and eISSN information. 
-journal_issn_database <- read_delim("journal_issn_database.csv") %>%
+journal_issn_database <- read_delim("example_journal_issn_database.csv") %>%
   rename(journal = "Journal title") %>%
   select(journal, ISSN, eISSN)
 
@@ -70,7 +70,7 @@ write_delim(missing_issn_journals,  "missing_issn_journals.csv", delim = ",")
 The journals with the missing 430 ISSNs and eISSNs were manually added into the file.
 
 ```{r}
-journal_metric_db <- read_delim("journal_metrics_database.xlsx")
+journal_metric_db <- read_delim("example_ journal_metrics_database.xlsx")
 # Multiple files were provided therefore the the missing journals and their respective bibliometrics were added to create one database. 
 ```
 
