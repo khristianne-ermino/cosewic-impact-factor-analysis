@@ -1,0 +1,229 @@
+---
+title: "01_cleaning_overton"
+author: "Khristianne Ermino"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    df_print: kable
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts = list(width.cutoff = 60), tidy=TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+```
+
+# Overton Report Cleanup
+
+## Loading In Reports (.CSV Files)
+```{r}
+citation_data_raw <- read_delim("Data/overton_cosewic_citations_raw copy.csv") # NEED TO MAKE A DUMMY FILE.
+
+citation_data_raw %>%
+  distinct(`Title of citing document`) %>%
+  nrow()
+#Shows how many distinct COSEWIC reports there are. 
+```
+Load the raw citation database from Overton and checks the number of unique COSEWIC reports included. 
+
+## Creating a Test Trial
+```{r}
+test_citation_data <-citation_data_raw[1:5,] %>% 
+  select("Title of citing document") %>%
+  rename(title = "Title of citing document")
+```
+A subset of the first five entries were used to test cleaning methods before applying them to the full dataset. The long citation title column was renamed to "title" to simplify coding.
+
+### Testing Regex for Year Extraction
+```{r}
+str_extract(test_citation_data$title,"(\\d\\d\\d\\d)+(?=E)")
+```
+Extracts the four-digit year embedded within the report title using str_extract(). The regular expression identifies the four digits occuring immediately before "E" in the title. This test dataset was used to confirm that the extraction correctly identifies the expected year format.
+
+```{r}
+test_citation_data %>% 
+  mutate(title_year = str_extract(test_citation_data$title,"(\\d\\d\\d\\d)+(?=E)")) 
+```
+Using mutate() with str_extract(), the four-digit year pattern occurring before "E" in the report title is extracted and added as a new column called "title_year" in the test dataframe.
+
+### Testing Species Name Extraction
+```{r}
+test_citation_data %>%
+  separate(title, into = c(NA, "int1"), sep = "COSEWIC assessment and status report on the ") %>% 
+  separate(int1, into = c("full.spp", NA), sep = ", in Canada") %>%
+  separate(full.spp, into = c("Common", "Latin"), sep = ', ')
+```
+This trial evaluated whether species names could be reliably extracted from standardized COSEWIC report titles and separated into common and Latin names.
+
+## Full Dataset Cleaning - Renaming Columns and Extracting Dates
+```{r}
+citation_data_with_pub_year <- citation_data_raw %>% 
+  rename(title = "Title of citing document", pub.date = "Cited published on date") %>%
+  separate(pub.date, into = c("journal.pub.year"), sep = '-', extra = "drop") 
+```
+The newly created "pub.date" column was separated using "-" as the delimiter to extract the publication year, which was stored in a new column called "journal.pub.year". Additional date information, including month and day, was removed. 
+
+### Making Intermediate Year Dataset and Creating final.year Column 
+```{r}
+citation_data_int <- citation_data_with_pub_year %>%
+  mutate(title.year = str_extract(citation_data_with_pub_year$title,"(\\d\\d\\d\\d)+(?=E)")) %>%
+  separate(`Published on date of citing document`, into = c("cit.pub.year"),
+    sep = "-", extra = "drop") %>%
+  mutate(final.year = if_else(is.na(title.year), cit.pub.year, title.year))
+```
+Creates an intermediate dataframe by extracting year information from the title and publication date, then generating final.year by prioritizing title.year and using cit.pub.year when unavailable.
+
+### Create Clean Dataset with Species Names
+```{r}
+citation_data_species_clean <- citation_data_int %>%
+  mutate(pub.title = title) %>%
+  separate(title, into = c(NA, "int1"), sep = "COSEWIC assessment and status report on ") %>%
+  separate(int1, into = c("full.spp", NA), sep = ", in Canada") %>%
+  separate(full.spp, into = c("common", "latin"), sep = ', ') %>%
+  select(common, latin, final.year, `Cited source or journal`, journal.pub.year, pub.title)
+```
+Creates a cleaned dataframe by extracting common and Latin species names from report titles while keeping publication years, source information, and the original title. final.year prioritizes the report title year, with cit.pub.year used when unavailable. Some species names remain NA due to differences in report formatting.
+
+### Identifying Report with Missing Species Names for Update Status Cleaning
+```{r}
+update_species_records <- citation_data_species_clean %>%
+  filter(is.na(common))
+```
+Filters the cleaned citation data for records with missing common species names. These records are primarily associated with update status reports, which follow a different title format and therefore require a separate approach for extracting the species names.
+
+## Extract Species Names from Update Status Reports
+```{r}
+update_species_clean <- update_species_records %>%
+  separate(pub.title, into = c(NA, "int1"), sep = "COSEWIC assessment and update status report on ", remove = F) %>%
+  separate(int1, into = c("full.spp", NA), sep = ", in Canada") %>%
+  separate(full.spp, into = c("common", "latin"), sep = ', ') %>%
+  select(common, latin, final.year, `Cited source or journal`, journal.pub.year, pub.title)
+```
+Creates a cleaned dataframe from update status reports where species names were not previously extracted. The report title is separated to isolate the species information, which is then split into common and Latin names. The final dataframe retains species names, year and source information, and the original title.
+
+## Detecting NA Objects
+```{r}
+update_species_clean %>%
+  distinct(common) %>%
+  filter(is.na(common))
+```
+The output confirms that no missing values remain in the common column. 
+
+```{r}
+citation_data_without_updates <- citation_data_species_clean %>%
+  filter(!is.na(common))
+```
+Records with missing common names were removed because updated entries were available in "update_species_clean".
+
+## Combine Cleaned and Updated Datasets         
+```{r}
+citation_data_combined <- bind_rows(citation_data_without_updates, update_species_clean)
+```
+The cleaned dataset was combined with the updated records to create a single combined dataset.
+
+## Verifying Missing Common Names
+```{r}
+missing_common <- citation_data_combined %>%
+  filter(is.na(common)) # none! 
+```
+No records with missing common names remained after merging the data frames. 
+
+## Check for Missing Scientific (Latin) Names
+```{r}
+missing_latin <- citation_data_combined %>%
+  filter(is.na(latin)) 
+View(missing.latin)
+# Shows 872 species. 
+```
+A total of 872 records were identified with missing scientific (Latin) names and will be reviewed for further cleaning. 
+
+### Extracting the Missing Common and Latin Names
+```{r}
+clean_missing_lat <- missing_latin %>%
+  separate(common, into = c(NA, "common"), sep = 'the ') %>%
+  separate(common, into = c("common", NA), sep = ' in Canada.') %>%
+  separate(common, into = c("common", "latin"), sep = ' \\(')
+```
+Cleans the missing.latin dataframe by removing unnecessary text and extracting the common and Latin species names from the common column. The text is separated at key delimiters to isolate and standardize the species names.
+
+```{r}
+clean_missing_lat$latin <- gsub(")", "", clean_missing_lat$latin)
+```
+The closing parenthesis was removed from the latin column using gsub() to clean the extracted scientific names.
+
+## Complete the Final Cleaned Dataset
+```{r}
+citation_data_clean <- citation_data_combined %>%
+  filter(!is.na(latin)) %>% 
+  bind_rows(clean_missing_lat) %>%
+  separate(common, into = c(NA, "common"), sep = 'the ') %>%
+  rename(source = "Cited source or journal")
+```
+Records with existing and newly extracted scientific names were combined to create the final cleaned dataset and column names were standardized. 
+
+## Identifying Reports with Missing Latin Species Names
+```{r}
+missing_latin_final <- citation_data_clean  %>% 
+  filter(is.na(latin)) %>%
+  distinct(pub.title) # only NA 
+# All reports in the current data frame that don't have a latin name. 
+```
+Reports with missing Latin species were identified for and will be manually correct to fix the inconsistencies in the initial name extraction.
+
+## Identify Species with Missing Common Names
+```{r}
+missing_common_final <- citation_data_clean %>%
+  filter(is.na(common)) %>%
+  distinct(latin)
+```
+Species lacking common names were identified for manual curation to ensure complete and standardized taxonomic information.
+
+## Identify Species with Multiple Assessment Years
+```{r}
+species_multiple_assessment_years <- citation_data_clean %>%
+  select(-c(source)) %>%
+  group_by(common, latin) %>%
+  summarise(n.years = n_distinct(final.year), .groups = "drop") %>%
+  filter(n.years > 1)
+```
+Species associated with multiple assessment years were identified to retain only the most recent assessment for each species in the cleaned dataset. 
+
+## Export Intermediate and Cleaned Datasets
+```{r}
+write_delim(missing_latin_final, "missing_latin_species.csv", delim = ",")
+
+write_delim(missing_common_final, "missing_common_species.csv", delim = ",")
+
+write_delim( species_multiple_assessment_years, "species_multiple_assessment_years.csv", delim = ",")
+
+write_delim(citation_data_clean, "citation_data_clean.csv", delim = ",")
+```
+Intermediate datasets requiring manual review and the cleaned database were exported as CSV files for quality control, manual curation, and subsequent analyses.
+
+After manual corrections to the "citation_data_clean.csv" file each column should now have its proper scientific and common names. The COSEWIC reports with duplicated years were managed and the manually corrected file was renamed to be "citation_data_final.csv".
+
+#Loading the File with Manual Corrections
+```{r}
+citation_data_final <- read_delim("citation_data_final.csv") %>%
+  mutate(common = str_to_title(common))
+```
+
+## Identify Reports with Missing Species Names
+```{r}
+na_commonandlatin <- manual_clean_db %>%
+  filter(is.na(common), is.na(latin)) %>% #Filtered for species that contain NAs in their common and latin columns. 
+  group_by(pub.title) %>% #Grouped them by the pub.title column. 
+  summarise(count = n())
+head(na_commonandlatin) 
+```
+Indicates there are no longer any species with NAs in both their common and scientific (latin) columns.

@@ -1,0 +1,171 @@
+---
+title: "03_cif_calculations_and_modelling"
+output: html_document
+date: "2026-09-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(lme4)
+library(DHARMa)
+library(fitdistrplus)
+library(gamlss)
+```
+
+
+```{r}
+citation_data <- read_delim("citation_data_final.csv") %>%
+  mutate(source = str_to_upper(source)) %>%
+  mutate(n.citations = 1) %>%
+  select(final.year, source, journal.pub.year, n.citations, pub.title)
+
+journal_metrics <- read_delim("final_df.csv") %>%
+  rename("avg_citable_2yr" = "sum_citable_2yrs", "source" = "journal_name") %>%
+  select(-c(source_sheet))
+```
+
+# Test Case Groundtruthing with CJZ
+```{r}
+test_citation_data <- citation_data %>%
+  filter(source == "CANADIAN JOURNAL OF ZOOLOGY") %>%
+  filter(journal.pub.year >= 2014)
+
+test_journal_metrics <- journal_metrics %>% 
+  filter(source == "CANADIAN JOURNAL OF ZOOLOGY") %>%
+  filter(year >= 2014)
+
+cit_2yr_sum_test <- test_journal_metrics %>%
+  left_join(test_citation_data, by = "source") %>%
+  filter(journal.pub.year == year - 1 | journal.pub.year == year - 2) %>%
+  group_by(source, year) %>%
+  summarise(
+    citations_prev2yrs = sum(n.citations),
+    .groups = "drop"
+  )
+
+final_test_journal_metrics <- test_journal_metrics %>%
+  left_join(cit_2yr_sum_test, by = c("source", "year")) %>%
+  mutate(citations_prev2yrs = coalesce(citations_prev2yrs, 0))
+
+
+cif_test <- final_test_journal_metrics %>%
+  mutate(cif = citations_prev2yrs / avg_citable_2yr)
+```
+
+# Full CIF Calculation
+```{r}
+citations_previous_2yr <- df2 %>%
+  left_join(df1, by = "source") %>%
+  filter(journal.pub.year == year - 1 | journal.pub.year == year - 2) %>%
+  group_by(source, year) %>%
+  summarise(
+    citations_prev2yrs = sum(n.citations),
+    .groups = "drop"
+  )
+
+journal_metrics_with_citations <- journal_metrics %>%
+  left_join(cit_2yr_sum, by = c("source", "year")) %>%
+  mutate(citations_prev2yrs = coalesce(citations_prev2yrs, 0))
+write_delim(journal_metrics_with_citations, "journal_metrics_with_citations", delim = ',')
+
+cif_calc <- journal_metrics_with_citations %>%
+  mutate(cif = citations_prev2yrs / avg_citable_2yr) %>%
+  filter(cif != 0, is.finite(cif)) %>%
+  rename(cos.if = cif,
+         jif = impact_factor) %>%
+  na.omit(cif_calc)
+
+mean_impact_factor <- cif_calc %>%
+  group_by(source) %>%
+  summarise(
+    mean.jif = mean(impact_factor, na.rm = TRUE),
+    mean.cif = mean(cif, na.rm = TRUE),
+    .groups = "drop")
+
+
+write_delim(cif_calc, "cif_calc.csv", delim = ",")
+```
+
+# Testing Linear Mixed-Effects Model Assumptions
+```{r}
+cif_lmm_year_source <- lmer(
+  cos.if ~ jif + (1 | year) + (1 | source),
+  data = cif_calc)
+
+cif_lmm_year_source_residuals <- simulateResiduals(cif_lmm_year_source)
+plot(cif_lmm_year_source_residuals) # residuals are not normally distributed
+
+
+cif_lmm_source <- lmer(
+  cos.if ~ jif + (1 | source),
+  data = cif_calc)
+
+cif_lmm_source_residuals <- simulateResiduals(cif_lmm_source)
+plot(cif_lmm_source_residuals)
+```
+
+# Finding Proper Distribution
+```{r}
+mGA <- histDist(cif_calc$cos.if, "GA", main = "Gamma")
+plot(mGA)
+fit.ga <- fitdist(cif_calc$cos.if, "gamma")
+plot(fit.ga)
+
+mPO <- histDist(cif_calc$cos.if, "DPO", main = "Double Poisson")
+plot(mPO)
+
+mGIG <- histDist(cif_calc$cos.if, "GIG", main = "Generalized Inverse Gaussian")
+plot(mGIG)
+
+mGG <- histDist(cif_calc$cos.if, "GG", main = "Generalized Gamma")
+plot(mGG)
+
+mWEI <- histDist(cif_calc$cos.if, "WEI", main = "Weibull")
+plot(mWEI)
+
+distribution_fits <- fitDist(
+  cos.if,
+  data = cif_calc,
+  type = "realAll",
+  try.gamlss = T)
+distribution_fits$fits
+
+AIC(mGIG,mGG, mWEI, mGA)
+```
+
+# GAMLSS Modelling
+```{r}
+
+cif_model_data <- cif_calc %>%
+  mutate(year = as.factor(year), 
+         source = as.factor(source))
+
+cif_jif_year_model <- gamlss(cos.if ~ jif + random(year), data = cif_model_data, family = "GG") # removed source as RE due to model convergence 
+
+wp(cif_jif_year_model)
+plot(cif_jif_year_model)
+
+cor.test(cif_model_data$jif,cif_model_data$cos.if, method = "spearman")
+
+summary(cif_jif_year_model)
+
+cif_jif_model <- gamlss(cos.if ~ jif, data = cif_model_data, family = "GG") 
+
+plot(cif_model_data$cos.if, cif_model_data$jif)
+cor(cif_model_data$cos.if, cif_model_data$jif) # -0.1119
+```
+
+# Figures
+```{r}
+ggplot(cif_model_data, aes(x = jif, y = cos.if)) + 
+  geom_jitter(alpha = 0.3) + 
+  theme_classic() + 
+  labs(x = "Journal Impact Factor", y = "Cosewic Impact Factor")
+```
+

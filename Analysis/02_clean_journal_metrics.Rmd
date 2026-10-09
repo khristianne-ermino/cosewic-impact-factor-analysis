@@ -1,0 +1,135 @@
+---
+title: "02_clean_journal_metrics"
+author: "Khristianne Ermino"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    df_print: kable
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts = list(width.cutoff = 60), tidy=TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+```
+
+# Merging COSEWIC Citation Journals with Journal ISSN/eISSN Metadata
+
+Before importing the data into R, "cosewic_citation_journals.csv" was previously processed with "sed" to remove the leading article "The" from journal titles. This standardized journal names with those in "journal_issn_database.csv". This improves the accuracy of matching journals to their corresponding ISSN and eISSN values during the merge. 
+
+```{r}
+
+# Read the list of journals cited in the COSEWIC assessment reports. 
+cosewic_cited_journals <- read_delim("cosewic_citation_journals.csv") %>%
+  rename(journal = "journals_cited") %>%
+  mutate(journal = str_to_upper(journal)) %>%
+  select(-count)
+
+#Read the librarian-provided journal database containing ISSN and eISSN information. 
+journal_issn_database <- read_delim("journal_issn_database.csv") %>%
+  rename(journal = "Journal title") %>%
+  select(journal, ISSN, eISSN)
+
+# Match cited journals with their corresponding ISSN and eISSN values. Combines the two data frames using the journal column.
+cosewic_journal_issn <- left_join(cosewic_cited_journals,journal_issn_database, by = c("journal" = "journal"))
+
+# Count missing ISSN values. 
+issn_missing <- is.na(cosewic_journal_issn$ISSN)
+sum(issn_missing)
+
+# Count missing eISSN values. 
+eissn_missing <- is.na(cosewic_journal_issn$eISSN)
+sum(eissn_missing)
+
+# Create a list of journals missing both ISSN and eISSN values. 
+missing_issn_journals <- cosewic_journal_issn %>%
+  filter(is.na(ISSN) & is.na(eISSN)) %>%
+  select(journal)
+View(missing_issn_journals)
+
+# Count the number of journals missing both ISSN and eISSN.
+cosewic_journal_issn %>%
+  filter(is.na(ISSN) & is.na(eISSN)) %>%
+  count()
+# Shows that there are 430 journals that have NAs in both ISSN and eISSN
+
+write_delim(cosewic_journal_issn, "cosewic_journal_issn.csv", delim = ",")
+
+write_delim(missing_issn_journals,  "missing_issn_journals.csv", delim = ",")
+```
+The journals with the missing 430 ISSNs and eISSNs were manually added into the file.
+
+```{r}
+journal_metric_db <- read_delim("journal_metrics_database.xlsx")
+# Multiple files were provided therefore the the missing journals and their respective bibliometrics were added to create one database. 
+```
+
+# Importing and Combining Annual Journal Metrics
+```{r}
+# Grab all names of tabs in excel file
+sheet_names <- excel_sheets(journal_metric_db) 
+View(sheet_names)
+
+# Read in and combine all sheets into one, rename columns to match, fix data types, keep source ID of sheet 
+combined_data <- sheet_names %>%
+  set_names() %>% 
+  map_dfr(~{
+    df <- read_excel(path = journal_metric_db, sheet = .x, col_types = c("text","text","text","text","text","text","text", "numeric", "numeric")) # Read in each sheet
+    df %>% 
+      rename(journal_name = contains("Journal name"), # Standardize column names
+        impact_factor = contains("JIF"),
+        citable_items = contains("citable items")) %>%
+      mutate(year = .x) %>% # add the year column based on the sheet name
+      select(journal_name, year, impact_factor, citable_items)
+  }, .id = "source_sheet") # .id is optional, tracks which sheet it came from
+
+# combined_data = FILE #2. 
+
+test <- combined_data %>%
+  filter(journal_name == "CANADIAN JOURNAL OF ZOOLOGY")
+```
+Import and combine all worksheets from "journal_metrics_database.xlsx" into a single data frame. Column names are standardized, a "year" column is created from each worksheet name and only the relevant variables are kept for analysis. The source worksheet is also preserver to track the origin of each record. 
+
+# Cleaning Data and Calculating 2-Year Citable Items
+```{r}
+clean_data <- combined_data %>%
+  distinct(journal_name, year, .keep_all = TRUE) # Removes duplicated entries ensuring only one unique journal name per year is kept
+
+# Code removes duplicate records by keeping only one entry per journal_name and year. The .keep_all = TRUE argument ensures that all other columns are retavained for the remaining unique rows. 
+
+final_df <- clean_data %>%
+  arrange(journal_name, year) %>% 
+  group_by(journal_name) %>% # group by journal so lags within each journal
+  mutate(sum_citable_2yrs = (lag(citable_items, 1) + lag(citable_items, 2))) %>% # create new column with lagged calculation.
+  ungroup() # stops futures ops from lagging/slowing
+View(final_df) # FILE 2 FOR REALSIES!
+write_delim(final_df, "final_df.csv", delim = ',')
+# Code calculates the number of citable items over the previous two years for each journal. The first ordered by journal and year to ensure the lag is applied correctly. Grouping by journal_name ensures that the lagged values are calculated within each journal. The lag() function is then used to pull values from the previous one and two years and their sum is found in a new column. The data is then ungrouped to prevent grouping from affecting alter steps. 
+
+# Check which years are NA 
+final_df %>%
+  filter(is.na(sum_citable_2yrs)) %>%
+  group_by(year) %>%
+  count() %>%
+  print(n=28)
+
+# Code identifies rows where the two-year sum couldn't be calculated.
+
+# Take out the NAs.
+final_clean_df <- final_df %>%
+  filter(!is.na(sum_citable_2yrs))
+View(final_clean_df)
+
+
+# Code removes rows with missing values in the sum_citable_2yrs column to create a cleaned dataset for analysis. These missing values are temporarily excluded due to incomplete lag data, with the option to revisit and manually address them later. 
+```
