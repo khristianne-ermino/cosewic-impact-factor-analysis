@@ -214,13 +214,13 @@ After manual corrections to the "citation_data_clean.csv" file each column shoul
 
 #Loading the File with Manual Corrections
 ```{r}
-citation_data_final <- read_delim("example_citation_data_final.csv.csv") %>%
+citation_data_final <- read_delim("example_citation_data_final.csv") %>%
   mutate(common = str_to_title(common))
 ```
 
 ## Identify Reports with Missing Species Names
 ```{r}
-na_commonandlatin <- manual_clean_db %>%
+na_commonandlatin <- example_citation_data_final.csv %>%
   filter(is.na(common), is.na(latin)) %>% #Filtered for species that contain NAs in their common and latin columns. 
   group_by(pub.title) %>% #Grouped them by the pub.title column. 
   summarise(count = n())
