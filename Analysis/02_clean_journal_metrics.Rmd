@@ -112,7 +112,7 @@ final_df <- clean_data %>%
   group_by(journal_name) %>% # group by journal so lags within each journal
   mutate(sum_citable_2yrs = (lag(citable_items, 1) + lag(citable_items, 2))) %>% # create new column with lagged calculation.
   ungroup() # stops futures ops from lagging/slowing
-View(final_df) # FILE 2 FOR REALSIES!
+View(final_df)
 write_delim(final_df, "final_df.csv", delim = ',')
 # Code calculates the number of citable items over the previous two years for each journal. The first ordered by journal and year to ensure the lag is applied correctly. Grouping by journal_name ensures that the lagged values are calculated within each journal. The lag() function is then used to pull values from the previous one and two years and their sum is found in a new column. The data is then ungrouped to prevent grouping from affecting alter steps. 
 
@@ -129,7 +129,6 @@ final_df %>%
 final_clean_df <- final_df %>%
   filter(!is.na(sum_citable_2yrs))
 View(final_clean_df)
-
 
 # Code removes rows with missing values in the sum_citable_2yrs column to create a cleaned dataset for analysis. These missing values are temporarily excluded due to incomplete lag data, with the option to revisit and manually address them later. 
 ```
